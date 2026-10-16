@@ -4,15 +4,24 @@
 
 #include "wolvic/jni_headers/Tab_jni.h"
 
+#include "base/android/callback_android.h"
+#include "base/android/jni_array.h"
+#include "base/android/jni_string.h"
+#include "base/json/json_writer.h"
 #include "components/webapps/browser/installable/installable_manager.h"
 #include "components/zoom/page_zoom.h"
 #include "components/zoom/zoom_controller.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/cors_origin_pattern_setter.h"
 #include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/render_frame_host.h"
+#include "content/public/common/isolated_world_ids.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/page_zoom.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
+#include "services/network/public/mojom/cors_origin_pattern.mojom.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 #include "wolvic/browser/autocomplete/wolvic_autofill_client.h"
 #include "wolvic/browser/autocomplete/wolvic_password_manager_client.h"
 #include "wolvic/browser/wolvic_contents.h"
@@ -106,6 +115,72 @@ jint JNI_Tab_GetCurrentZoomLevel(JNIEnv* env,
   double zoom_factor = blink::ZoomLevelToZoomFactor(
       zoom::ZoomController::GetZoomLevelForWebContents(web_contents));
   return static_cast<int>(zoom_factor * 100 + 0.5);
+}
+
+// Stena: runs `script` in the primary main frame and hands its completion
+// value to `jcallback` as JSON ("null" when there is none or it cannot be
+// serialized). world_id 0 is the page's own world, which Chromium only allows
+// after AllowInjectingJavaScript(); any other id is an isolated world (the model
+// of an extension content script), offset past content's own ids. Promises are
+// not awaited.
+void JNI_Tab_ExecuteScript(JNIEnv* env,
+                           const JavaRef<jobject>& jweb_contents,
+                           const JavaRef<jstring>& jscript,
+                           jint world_id,
+                           const JavaRef<jobject>& jcallback) {
+  WebContents* web_contents = WebContents::FromJavaWebContents(jweb_contents);
+  DCHECK(web_contents);
+  std::u16string script = base::android::ConvertJavaStringToUTF16(env, jscript);
+  auto done = base::BindOnce(
+      [](const base::android::ScopedJavaGlobalRef<jobject>& callback,
+         base::Value result) {
+        base::android::RunStringCallbackAndroid(
+            callback, base::WriteJson(result).value_or("null"));
+      },
+      base::android::ScopedJavaGlobalRef<jobject>(jcallback));
+  content::RenderFrameHost* frame = web_contents->GetPrimaryMainFrame();
+  if (world_id == 0) {
+    content::RenderFrameHost::AllowInjectingJavaScript();
+    frame->ExecuteJavaScript(script, std::move(done));
+    return;
+  }
+  CHECK_GT(world_id, 0);
+  frame->ExecuteJavaScriptInIsolatedWorld(
+      script, std::move(done),
+      content::ISOLATED_WORLD_ID_CONTENT_END + world_id - 1);
+}
+
+// Stena: lets pages of `jorigin` read https resources of `jhosts` without CORS
+// headers, in the tab's browser context. This is the mechanism behind an
+// extension's host permissions (extensions/browser/extension_util.cc). Each call
+// replaces the list for that origin. `jdone` gets true once every storage
+// partition has it.
+void JNI_Tab_AllowCrossOriginReads(JNIEnv* env,
+                                   const JavaRef<jobject>& jweb_contents,
+                                   const JavaRef<jstring>& jorigin,
+                                   const JavaRef<jobjectArray>& jhosts,
+                                   const JavaRef<jobject>& jdone) {
+  WebContents* web_contents = WebContents::FromJavaWebContents(jweb_contents);
+  DCHECK(web_contents);
+  url::Origin origin = url::Origin::Create(
+      GURL(base::android::ConvertJavaStringToUTF8(env, jorigin)));
+  std::vector<std::string> hosts;
+  base::android::AppendJavaStringArrayToStringVector(env, jhosts, &hosts);
+  std::vector<network::mojom::CorsOriginPatternPtr> allow;
+  for (const std::string& host : hosts) {
+    allow.push_back(network::mojom::CorsOriginPattern::New(
+        "https", host, /*port=*/0,
+        network::mojom::CorsDomainMatchMode::kDisallowSubdomains,
+        network::mojom::CorsPortMatchMode::kAllowAnyPort,
+        network::mojom::CorsOriginAccessMatchPriority::kDefaultPriority));
+  }
+  content::CorsOriginPatternSetter::Set(
+      web_contents->GetBrowserContext(), origin, std::move(allow), {},
+      base::BindOnce(
+          [](const base::android::ScopedJavaGlobalRef<jobject>& done) {
+            base::android::RunBooleanCallbackAndroid(done, true);
+          },
+          base::android::ScopedJavaGlobalRef<jobject>(jdone)));
 }
 
 }  // namespace wolvic

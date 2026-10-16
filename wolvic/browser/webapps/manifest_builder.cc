@@ -38,7 +38,6 @@ std::string GetDisplayMode(blink::mojom::DisplayMode display) {
   }
 
   NOTREACHED();
-  return "browser";
 }
 
 std::string GetScreenOrientationLockType(
@@ -65,7 +64,6 @@ std::string GetScreenOrientationLockType(
   }
 
   NOTREACHED();
-  return "any";
 }
 
 }  // namespace

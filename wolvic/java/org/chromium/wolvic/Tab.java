@@ -9,6 +9,7 @@ import android.text.TextUtils;
 
 import androidx.annotation.NonNull;
 
+import org.chromium.base.Callback;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.ThreadUtils;
 import org.jni_zero.JNINamespace;
@@ -158,6 +159,36 @@ public class Tab {
         });
     }
 
+    /**
+     * Stena: runs a script in the main frame. worldId 0 is the page's own world, 1..10 are
+     * isolated worlds. The callback gets the completion value as JSON ("null" if none);
+     * promises are not awaited.
+     */
+    public void executeScript(@NonNull String script, int worldId, @NonNull Callback<String> callback) {
+        ThreadUtils.runOnUiThread(() -> {
+            if (mWebContents == null || mWebContents.isDestroyed()) {
+                callback.onResult("null");
+                return;
+            }
+            TabJni.get().executeScript(mWebContents, script, worldId, callback);
+        });
+    }
+
+    /**
+     * Stena: lets pages of {@code origin} read https resources of {@code hosts} without CORS
+     * headers, in this tab's browser context (an extension's host permissions). Replaces the
+     * list for that origin; {@code done} runs on the UI thread once it is in effect.
+     */
+    public void allowCrossOriginReads(@NonNull String origin, @NonNull String[] hosts, @NonNull Runnable done) {
+        ThreadUtils.runOnUiThread(() -> {
+            if (mWebContents == null || mWebContents.isDestroyed()) {
+                done.run();
+                return;
+            }
+            TabJni.get().allowCrossOriginReads(mWebContents, origin, hosts, (Boolean ok) -> done.run());
+        });
+    }
+
     private boolean isEntryMarkedAsSkipped(int entryIndex) {
         return NAVIGATION_ENTRY_MARKED_AS_SKIPPED_VALUE.equals(
                 mNavigationController.getEntryExtraData(entryIndex, NAVIGATION_ENTRY_MARKED_AS_SKIPPED_KEY));
@@ -215,5 +246,7 @@ public class Tab {
         void pageZoomOut(WebContents webContents);
         void pageZoomReset(WebContents webContents);
         int getCurrentZoomLevel(WebContents webContents);
+        void executeScript(WebContents webContents, String script, int worldId, Callback<String> callback);
+        void allowCrossOriginReads(WebContents webContents, String origin, String[] hosts, Callback<Boolean> done);
     }
 }
