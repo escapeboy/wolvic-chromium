@@ -90,7 +90,10 @@ struct SharedMemoryLimits {
     // any excess space.
     limits.start_transfer_buffer_size = 64 * 1024;
     limits.min_transfer_buffer_size = 64 * 1024;
-    limits.max_transfer_buffer_size = full_screen_texture_size_in_bytes;
+    limits.max_transfer_buffer_size =
+        full_screen_texture_size_in_bytes > limits.start_transfer_buffer_size
+            ? full_screen_texture_size_in_bytes
+            : limits.start_transfer_buffer_size;
     // Texture uploads may use mapped memory so give a reasonable limit for
     // them.
     limits.mapped_memory_reclaim_limit = full_screen_texture_size_in_bytes;
